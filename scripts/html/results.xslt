@@ -73,12 +73,12 @@
               <xsl:value-of select="Tests/Date/start"/>
             </td>
             <td style="padding: 0px 10px 0px 10px">
-              <a href="https://gitlab.psi.ch/OPAL/src/commit/{$code_hash}" target="_blank">
+              <a href="https://github.com/OPALX-project/OPALX/commit/{$code_hash}" target="_blank">
                 <xsl:value-of select="Tests/Revisions/code"/>
               </a>
             </td>
             <td style="padding: 0px 10px 0px 10px">
-              <a href="https://gitlab.psi.ch/OPAL/regression-tests/commit/{$tests_hash}" target="_blank">
+              <a href="https://github.com/OPALX-project/regression-tests-x/commit/{$tests_hash}" target="_blank">
                 <xsl:value-of select="Tests/Revisions/tests"/>
               </a>
             </td>
