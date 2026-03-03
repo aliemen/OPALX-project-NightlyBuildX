@@ -218,10 +218,20 @@ if [[ -n "${publish_dir}" ]]; then
     mkdir -p "${publish_dir}"
 fi
 
+# Ensure unit tests are enabled for all nightly builds unless explicitly disabled.
+case " ${cmake_args[*]} " in
+    *"OPALX_ENABLE_UNIT_TESTS"*)
+        # Flag already provided by config; leave as-is.
+        ;;
+    *)
+        cmake_args+=("-DOPALX_ENABLE_UNIT_TESTS=ON")
+        ;;
+esac
+
 
 #-------------------------------------------------------------------------------
 # Directory layout
-#
+# 
 # ${PREFIX}/scripts					                        ${bindir}
 # ${PREFIX}/workspace					                    ${workspace}
 # ${PREFIX}/workspace/${branch}				                ${branchdir}
@@ -277,6 +287,17 @@ result_r_passed="-"
 result_r_failed="-"
 result_r_disabled="-"
 result_r_broken="-"
+
+#-------------------------------------------------------------------------------
+# Per-run overview log file (capturing full script output)
+#-------------------------------------------------------------------------------
+if [[ -n "${publish_dir}" ]]; then
+    ofile="${publish_dir}/output/${branch}/${architecture}/${timestamp}.txt"
+    mkdir -p "$(dirname "${ofile}")"
+    # Mirror all subsequent stdout/stderr to the per-run log file while
+    # preserving normal console output.
+    exec > >(tee -a "${ofile}") 2>&1
+fi
 
 clone_repo() {
 	local -r repo_url="$1"
@@ -335,6 +356,55 @@ compile_opalx() {
 	cmake "${cmake_args[@]}" "${srcdir}"
 	time make -j2
     result_compile='ok'
+}
+
+run_unittests() {
+    # Nothing to do if there is no publish directory configured.
+    [[ -n "${publish_dir}" ]] || return 0
+
+    local -r unit_dir="${publish_dir}/unitTests/${branch}/${architecture}"
+    mkdir -p "${unit_dir}"
+
+    local -r results_txt="${unit_dir}/results_${timestamp}.txt"
+
+    cd "${builddir}"
+
+    # Run CTest and capture its output while keeping the script alive even if
+    # some tests fail. The overall pipeline exit code is determined by tee,
+    # so set -e will not abort the script here.
+    ctest --output-on-failure | tee "${results_txt}"
+    local -i ec=${PIPESTATUS[0]}
+
+    # Defaults if we cannot parse a summary.
+    result_u_total="-"
+    result_u_passed="-"
+    result_u_failed="-"
+    result_u_disabled="-"
+    result_u_broken="-"
+
+    if [[ -s "${results_txt}" ]]; then
+        # Try to parse the summary line, e.g.:
+        #  "100% tests passed, 0 tests failed out of 10"
+        #  " 50% tests passed, 1 tests failed out of 2"
+        local summary
+        summary=$(grep -E "tests failed out of" "${results_txt}" | tail -n 1 || true)
+        if [[ -n "${summary}" ]]; then
+            local failed total
+            if [[ "${summary}" =~ ([0-9]+)\ tests\ failed\ out\ of\ ([0-9]+) ]]; then
+                failed="${BASH_REMATCH[1]}"
+                total="${BASH_REMATCH[2]}"
+                result_u_total="${total}"
+                result_u_failed="${failed}"
+                if [[ -n "${total}" && -n "${failed}" ]]; then
+                    result_u_passed="$(( total - failed ))"
+                fi
+                result_u_disabled="-"
+                result_u_broken="-"
+            fi
+        fi
+    fi
+
+    return ${ec}
 }
 
 run_regressiontests() {
@@ -446,10 +516,10 @@ update_overview() {
         # Extract only the table lines (starting from the date header)
         awk '/\|.*Date.*build.*unit-tests.*regression-tests/ {found=1} found {print}' "${index_org}" > "${tmpfile}"
     else
-        # New file - create empty table
-        echo '|       Date | build | unit-tests   | regression-tests   |' > "${tmpfile}"
-        echo '|------------+-------+--------------+--------------------|' >> "${tmpfile}"
-        echo '|            |       |              |                    |' >> "${tmpfile}"
+        # New file - create empty table (including dedicated log column)
+        echo '|       Date | build | unit-tests   | regression-tests   | log |' > "${tmpfile}"
+        echo '|------------+-------+--------------+--------------------+-----|' >> "${tmpfile}"
+        echo '|            |       |              |                    |     |' >> "${tmpfile}"
     fi
 
     # Regenerate the full file from template with substitutions
@@ -468,15 +538,18 @@ update_overview() {
 
     # links to generated XML pages used in the table
     # Adjusted relative paths from overview directory
-    local -r u_results_html="../../../unitTests/${branch}/${architecture}/results_${timestamp}.html"
+    local -r u_results_html="../../../unitTests/${branch}/${architecture}/results_${timestamp}.txt"
     local -r r_results_html="../../../regressionTests/${branch}/${architecture}/results_${timestamp}.html"
 
     local time_col
+    local log_col="-"
     local ofile="${publish_dir}/output/${branch}/${architecture}/${timestamp}.txt"
     if [[ -e "${ofile}" ]]; then
-        time_col="[[../../../output/${branch}/${architecture}/${timestamp}.txt][${today} ${time/-/:}]]"
+        time_col="${today} ${time/-/:}"
+        log_col="[[../../../output/${branch}/${architecture}/${timestamp}.txt][log]]"
     else
         time_col="${today} ${time/-/:}"
+        log_col="-"
     fi
 
     # build string with result for unit-tests. This will be used as link-name.
@@ -507,6 +580,7 @@ update_overview() {
     line+="| ${result_compile} "
     line+="| ${u_report} "
     line+="| ${r_report} "
+    line+="| ${log_col} "
     line+="|"
     local -r tmpfile2=$(mktemp "/tmp/awk.XXXXXX")
     awk "{print}; /^\|-/ {print \"${line}\"}" \
@@ -746,6 +820,10 @@ main() {
 	fi
     
     # Unit tests
+    if [[ "${do_unittests}" == "yes" ]]; then
+        printf "\nRunning unit tests for OPALX\n"
+        run_unittests || true
+    fi
 
     # Regression test
     printf "\nUpdating regression tests repository...\n"

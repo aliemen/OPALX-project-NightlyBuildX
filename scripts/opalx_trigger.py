@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import threading
+from datetime import datetime
 from flask import (
     Flask,
     request,
@@ -19,6 +20,11 @@ BRANCH_PATTERN = re.compile(r"^[A-Za-z0-9._\-/]+$")
 
 RUN_SCRIPT = "/home/aliemen/opalx/nightly-build-opalx/NightlyBuildX/scripts/run_nightly_local.sh"
 
+# Base directory for full trigger logs on disk. Can be overridden via env.
+TRIGGER_LOG_BASE_DIR = os.environ.get(
+    "OPALX_TRIGGER_LOG_DIR", "/home/aliemen/opalx/nightly-results/trigger-logs"
+)
+
 # Simple in-memory state to track the currently running job.
 _job_lock = threading.Lock()
 _job_running = False
@@ -27,10 +33,13 @@ _job_last_ok = None
 
 # Bounded in-memory log buffer for the current job (last N lines).
 _job_log_lines = []
-_JOB_LOG_MAX_LINES = 1000
+_JOB_LOG_MAX_LINES = 5000
 # Sequence numbers for log lines to help the client handle truncation.
 _job_log_start_seq = 0
 _job_log_end_seq = 0
+
+# Path of the full on-disk log file for the current/last job.
+_job_log_file_path = None
 
 
 def _append_log_line(line: str) -> None:
@@ -48,6 +57,7 @@ def _append_log_line(line: str) -> None:
 def _run_nightly_job(branch: str, env: dict) -> None:
     """Background worker that runs the nightly script and records status."""
     global _job_running, _job_last_ok, _job_log_lines, _job_log_start_seq, _job_log_end_seq
+
     ok = False
 
     # Clear any previous log for this job.
@@ -55,8 +65,14 @@ def _run_nightly_job(branch: str, env: dict) -> None:
         _job_log_lines = []
         _job_log_start_seq = 0
         _job_log_end_seq = 0
+        log_file_path = _job_log_file_path
 
+    log_file = None
     try:
+        if log_file_path:
+            os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
+            log_file = open(log_file_path, "a", encoding="utf-8")
+
         proc = subprocess.Popen(
             [RUN_SCRIPT],
             env=env,
@@ -70,13 +86,22 @@ def _run_nightly_job(branch: str, env: dict) -> None:
         for line in proc.stdout:
             with _job_lock:
                 _append_log_line(line)
+            if log_file is not None:
+                log_file.write(line)
 
         proc.wait()
         ok = proc.returncode == 0
     except Exception as exc:
+        msg = f"[trigger] Exception while running job: {exc}"
         with _job_lock:
-            _append_log_line(f"[trigger] Exception while running job: {exc}")
+            _append_log_line(msg)
+        if log_file is not None:
+            log_file.write(msg + "\n")
         ok = False
+    finally:
+        if log_file is not None:
+            log_file.flush()
+            log_file.close()
 
     with _job_lock:
         _job_running = False
@@ -97,13 +122,21 @@ def trigger():
     env["OPALX_BRANCH"] = branch
 
     with _job_lock:
-        global _job_running, _job_last_branch, _job_last_ok
+        global _job_running, _job_last_branch, _job_last_ok, _job_log_file_path
         if _job_running:
             # A job is already in progress; just send the user to the status page.
             return redirect(url_for("trigger_status"), code=303)
         _job_running = True
         _job_last_branch = branch
         _job_last_ok = None
+
+        # Compute log file path for this run, grouped by branch.
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        safe_branch = branch or "unknown"
+        log_dir = os.path.join(TRIGGER_LOG_BASE_DIR, safe_branch)
+        _job_log_file_path = os.path.join(
+            log_dir, f"opalx-nightly-{safe_branch}-{timestamp}.log"
+        )
 
     # Start the job in a background thread and immediately show the status page.
     t = threading.Thread(
@@ -212,7 +245,7 @@ def trigger_status():
 <body>
   <div class="page">
     <div class="card">
-      <div class="spinner"></div>
+      <div class="spinner" id="spinner"></div>
       <h1>Nightly run status</h1>
       <p id="status">{"Running nightly job for branch '" + branch_label + "'." if running else "Checking job status…"}</p>
       <p class="subtext">This can take a while. Please keep this tab open until it completes.</p>
@@ -332,11 +365,13 @@ def trigger_status():
     }}
 
     function checkStatus() {{
+      if (!pollingActive) return;
       fetch({repr(url_for("trigger_state"))}, {{ cache: "no-store" }})
         .then(function (resp) {{ return resp.json(); }})
         .then(function (data) {{
           var statusEl = document.getElementById("status");
           var downloadCard = document.getElementById("download-card");
+          var spinnerEl = document.getElementById("spinner");
           if (!data.running && data.ok !== null) {{
             pollingActive = false;
             if (data.ok) {{
@@ -347,6 +382,9 @@ def trigger_status():
             if (downloadCard) {{
               downloadCard.style.display = "block";
             }}
+            if (spinnerEl) {{
+              spinnerEl.style.display = "none";
+            }}
           }} else if (data.running) {{
             statusEl.textContent = "Running nightly job for branch '" + (data.branch || "-") + "'…";
           }}
@@ -356,9 +394,9 @@ def trigger_status():
         }});
     }}
 
-    // Poll every 5 seconds.
-    setInterval(checkStatus, 5000);
-    setInterval(checkLog, 5000);
+    // Poll every 2 seconds.
+    setInterval(checkStatus, 2000);
+    setInterval(checkLog, 2000);
     checkStatus();
     checkLog();
   </script>
@@ -404,9 +442,21 @@ def download_log():
     """Download the current or last job's log as a plain-text file."""
     with _job_lock:
         branch = _job_last_branch or "unknown"
+        log_file_path = _job_log_file_path
         lines = list(_job_log_lines)
 
-    content = "\n".join(lines) + ("\n" if lines else "")
+    # Prefer the full on-disk log if available; otherwise fall back to the
+    # in-memory buffer (last N lines).
+    content: str
+    if log_file_path and os.path.isfile(log_file_path):
+        try:
+            with open(log_file_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+        except OSError:
+            content = "\n".join(lines) + ("\n" if lines else "")
+    else:
+        content = "\n".join(lines) + ("\n" if lines else "")
+
     filename = f"opalx-nightly-{branch}.log"
 
     from flask import Response

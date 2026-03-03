@@ -76,7 +76,7 @@ a:hover {
 
 @@html:<h1 style="font-size: 2.5rem; margin-top: 0; padding-bottom: 0.5rem; border-bottom: 3px solid #2c5aa0;">Regression Tests - Branch <span class="branch-name">@BRANCH@</span> - Architecture <span class="architecture-name">@ARCHITECTURE@</span></h1>@@
 
-|       Date | build | unit-tests   | regression-tests   |
-|------------+-------+--------------+--------------------|
-|            |       |              |                    |
+|       Date | build | unit-tests   | regression-tests   | log |
+|------------+-------+--------------+--------------------+-----|
+|            |       |              |                    |     |
 
