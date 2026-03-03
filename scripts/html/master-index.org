@@ -8,32 +8,68 @@
 
 @@html:
 <style>
-table colgroup col:nth-child(1) {
-    width: 17%;
+html {
+  line-height: 1.5;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 16px;
+  color: #111827;
+  background-color: #f9fafb;
 }
-table colgroup col:nth-child(2) {
-    width: 5%;
+body {
+  margin: 0 auto;
+  max-width: 60rem;
+  padding: 2.5rem 1.5rem 3rem;
 }
-table colgroup col:nth-child(3) {
-    width: 39%;
+h1, h2, h3 {
+  font-weight: 600;
+  color: #111827;
+  margin-top: 1.5rem;
+  margin-bottom: 0.75rem;
 }
-table colgroup col:nth-child(4) {
-    width: 39%;
+p, li {
+  color: #374151;
+}
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin-top: 1.5rem;
+  background-color: #ffffff;
+  border-radius: 0.5rem;
+  overflow: hidden;
+  border: 1px solid #d1d5db;
+}
+th, td {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid #e5e7eb;
+  text-align: left;
+}
+tr:last-child td {
+  border-bottom: none;
+}
+tbody tr:nth-child(even) {
+  background-color: #f9fafb;
+}
+a, a:visited {
+  color: #2563eb;
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
 }
 .branch-name, .architecture-name {
-    font-family: "Consolas", "Monaco", "Courier New", monospace;
-    font-size: 0.9em;
-    background-color: #f4f4f4;
-    padding: 2px 8px;
-    border-radius: 3px;
-    color: #c7254e;
-    font-weight: 600;
-    border: 1px solid #ddd;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.85rem;
+  background-color: #eff6ff;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: #1d4ed8;
+  font-weight: 600;
+  border: 1px solid #bfdbfe;
 }
-.author {
-    text-align: left;      /* Change to: left, center, or right */
-    margin-left: 0;        /* Adjust left margin */
-    margin-right: auto;    /* Or set specific value like: 200px */
+@media (max-width: 640px) {
+  body {
+    padding: 1.8rem 1rem 2.4rem;
+  }
 }
 </style>
 @@

@@ -10,7 +10,7 @@ set -o errexit
 declare -ri	EC_ARG_ERROR=1
 declare -ri	EC_GIT_ERROR=10
 
-declare branch="master"
+declare branch="${OPALX_BRANCH:-master}"
 declare regtests_branch="cleanup"
 declare architecture="cpu-serial"
 
@@ -333,7 +333,7 @@ compile_opalx() {
 	mkdir -p "${builddir}"
 	cd "${builddir}"
 	cmake "${cmake_args[@]}" "${srcdir}"
-	time make -j8
+	time make -j2
     result_compile='ok'
 }
 
@@ -359,12 +359,12 @@ run_regressiontests() {
 	opts+=("--base-dir=${testsdir}")
     opts+=("--timestamp=${timestamp}")
 
-    # Run regression tests
+    # Run regression tests (force unbuffered Python output so logs stream to the UI)
     if [[ "${use_slurm}" == "yes" ]]; then
 	    salloc --gpus=1 --partition=gwendolen --cluster=gmerlin6  --account=gwendolen --nodes=1 --ntasks=1 --cpus-per-task=1 --time=02:00:00 \
-            srun --pty python3 "${run_tests}" "${opts[@]}" "--" "${tests[@]}"
+            srun --pty python3 -u "${run_tests}" "${opts[@]}" "--" "${tests[@]}"
     else
-        python3 "${run_tests}" "${opts[@]}" "--" "${tests[@]}"
+        python3 -u "${run_tests}" "${opts[@]}" "--" "${tests[@]}"
     fi
 
     # Ensure existance of publishing directory
@@ -540,6 +540,115 @@ update_overview() {
     else
         echo "pandoc not found; skipping overview HTML generation."
     fi
+
+    # Update top-level index with trigger form and per-branch links
+    update_root_index
+}
+
+update_root_index() {
+    # Regenerate the top-level index.html under the publish root.
+    [[ -n ${publish_dir} ]] || return 0
+
+    local -r root_dir="${publish_dir}"
+    local -r root_index="${root_dir}/index.html"
+
+    mkdir -p "${root_dir}"
+
+    {
+        echo '<!DOCTYPE html>'
+        echo '<html lang="en">'
+        echo '<head>'
+        echo '  <meta charset="UTF-8" />'
+        echo '  <title>OPALX Nightly Results</title>'
+        echo '  <style>'
+        echo '    :root { color-scheme: dark; }'
+        echo '    * { box-sizing: border-box; margin: 0; padding: 0; }'
+        echo '    body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;'
+        echo '           min-height: 100vh; padding: 2.5rem 1.5rem 3rem;'
+        echo '           background: radial-gradient(circle at top, #1f2937 0, #020617 55%, #000 100%);'
+        echo '           color: #e5e7eb; display: flex; justify-content: center; }'
+        echo '    .page { width: 100%; max-width: 960px; }'
+        echo '    .header { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 2.5rem; }'
+        echo '    .title { font-size: 1.9rem; font-weight: 600; letter-spacing: 0.03em; }'
+        echo '    .subtitle { font-size: 0.95rem; color: #9ca3af; max-width: 40rem; }'
+        echo '    .grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1.4fr); gap: 1.5rem; align-items: flex-start; }'
+        echo '    @media (max-width: 800px) { .grid { grid-template-columns: minmax(0, 1fr); } }'
+        echo '    .card { background: rgba(15,23,42,0.96); border-radius: 0.9rem; padding: 1.75rem 1.8rem;'
+        echo '            box-shadow: 0 22px 45px rgba(15,23,42,0.8); border: 1px solid rgba(148,163,184,0.25); }'
+        echo '    .card h2 { font-size: 1.15rem; margin-bottom: 0.75rem; }'
+        echo '    .card p.hint { font-size: 0.9rem; color: #9ca3af; margin-bottom: 1.1rem; }'
+        echo '    label { display: block; text-align: left; font-size: 0.85rem; color: #9ca3af; margin-bottom: 0.35rem; }'
+        echo '    input[type="text"] { width: 100%; padding: 0.55rem 0.75rem; border-radius: 0.55rem;'
+        echo '                         border: 1px solid rgba(148,163,184,0.6); background: rgba(15,23,42,0.8);'
+        echo '                         color: #e5e7eb; font-size: 0.95rem; outline: none; }'
+        echo '    input[type="text"]:focus { border-color: #38bdf8; box-shadow: 0 0 0 1px rgba(56,189,248,0.6); }'
+        echo '    .button-row { margin-top: 1rem; display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; }'
+        echo '    .primary-button { padding: 0.6rem 1.4rem; border-radius: 999px; border: none; cursor: pointer;'
+        echo '                      font-size: 0.9rem; font-weight: 500; color: #0f172a;'
+        echo '                      background: linear-gradient(135deg, #38bdf8, #22c55e);'
+        echo '                      box-shadow: 0 14px 30px rgba(56,189,248,0.45); }'
+        echo '    .primary-button:hover { filter: brightness(1.05); }'
+        echo '    .secondary-button { padding: 0.55rem 1.2rem; border-radius: 999px; border: 1px solid rgba(148,163,184,0.7);'
+        echo '                        cursor: pointer; font-size: 0.85rem; font-weight: 500;'
+        echo '                        background: transparent; color: #e5e7eb; }'
+        echo '    .secondary-button:hover { background: rgba(15,23,42,0.8); }'
+        echo '    .button-hint { font-size: 0.8rem; color: #9ca3af; }'
+        echo '    .branch-list { list-style: none; margin-top: 0.75rem; }'
+        echo '    .branch-list li { margin: 0.25rem 0; }'
+        echo '    .branch-list a { color: #38bdf8; text-decoration: none; font-size: 0.95rem; }'
+        echo '    .branch-list a:hover { text-decoration: underline; }'
+        echo '    @media (max-width: 480px) {'
+        echo '      body { padding: 1.8rem 1.1rem 2.4rem; }'
+        echo '      .title { font-size: 1.5rem; }'
+        echo '      .card { padding: 1.4rem 1.4rem; }'
+        echo '      .button-row { flex-direction: column; align-items: stretch; }'
+        echo '      .primary-button,'
+        echo '      .secondary-button { width: 100%; justify-content: center; text-align: center; }'
+        echo '    }'
+        echo '  </style>'
+        echo '</head>'
+        echo '<body>'
+        echo '  <div class="page">'
+        echo '    <header class="header">'
+        echo '      <div class="title">OPALX Nightly Results</div>'
+        echo '      <p class="subtitle">Trigger a protected nightly run and browse per-branch test overviews. The trigger endpoint is secured via HTTP basic authentication.</p>'
+        echo '    </header>'
+        echo '    <main class="grid">'
+        echo '      <section class="card">'
+        echo '        <h2>Trigger new run</h2>'
+        echo '        <p class="hint">Submit a branch name to start a new nightly job. You will see a live status screen while it runs.</p>'
+        echo '        <form method="POST" action="/trigger">'
+        echo '          <label for="branch-input">Branch</label>'
+        echo '          <input id="branch-input" type="text" name="branch" placeholder="e.g. master or feature/xyz" required />'
+        echo '          <div class="button-row">'
+        echo '            <button class="primary-button" type="submit">Start nightly run</button>'
+        echo '            <button class="secondary-button" type="button" onclick="window.location.href='\''/trigger/status'\''">View current run status</button>'
+        echo '            <span class="button-hint">Requires valid HTTP basic auth.</span>'
+        echo '          </div>'
+        echo '        </form>'
+        echo '      </section>'
+        echo '      <section class="card">'
+        echo '        <h2>Available branches</h2>'
+        echo '        <p class="hint">Browse historical overviews for each branch with compiled results.</p>'
+        echo '        <ul class="branch-list">'
+
+        if [[ -d "${root_dir}/overview" ]]; then
+            local d branch_name
+            for d in "${root_dir}/overview"/*; do
+                [[ -d "${d}" ]] || continue
+                branch_name=$(basename "${d}")
+                [[ -f "${d}/index.html" ]] || continue
+                printf '          <li><a href="overview/%s/index.html">%s</a></li>\n' "${branch_name}" "${branch_name}"
+            done
+        fi
+
+        echo '        </ul>'
+        echo '      </section>'
+        echo '    </main>'
+        echo '  </div>'
+        echo '</body>'
+        echo '</html>'
+    } > "${root_index}"
 }
 
 update_master_landing_page() {
