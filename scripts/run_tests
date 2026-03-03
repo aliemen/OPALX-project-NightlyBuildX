@@ -83,7 +83,7 @@ OPTIONS:
 ===========
 --publish-dir=DIR
 	Prefix of the publication directory.
-	If not set, defaults to /home/aliemen/nightly-results/
+	If not set, defaults to /home/aliemen/opalx/nightly-results/
 	If explicitly set to empty (e.g. --publish-dir=''), no HTML output will be created.
 
 --use-slurm
@@ -211,7 +211,7 @@ done
 # Default: always publish nightly results unless explicitly disabled.
 # To disable publication, pass --publish-dir='' explicitly.
 if [[ "${publish_dir_was_set}" != "yes" && -z "${publish_dir}" ]]; then
-    publish_dir="/home/aliemen/nightly-results"
+    publish_dir="/home/aliemen/opalx/nightly-results"
 fi
 if [[ -n "${publish_dir}" ]]; then
     publish_dir=$(python3 -c "import os, sys; print(os.path.abspath(sys.argv[1]))" "${publish_dir}")

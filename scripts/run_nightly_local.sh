@@ -7,7 +7,7 @@ set -o pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Prefer the local OPALX checkout that lives next to NightlyBuildX/ (as in your layout):
-# /home/aliemen/nightly-build-opalx/opalx
+# /home/aliemen/opalx/nightly-build-opalx/opalx
 export OPALX_SRC_DIR="${OPALX_SRC_DIR:-"$(cd "${script_dir}/../.." && pwd)/opalx"}"
 
 cd "${script_dir}"

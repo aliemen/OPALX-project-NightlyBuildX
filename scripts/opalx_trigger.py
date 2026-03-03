@@ -17,7 +17,7 @@ from flask import (
 app = Flask(__name__)
 BRANCH_PATTERN = re.compile(r"^[A-Za-z0-9._\-/]+$")
 
-RUN_SCRIPT = "/home/aliemen/nightly-build-opalx/NightlyBuildX/scripts/run_nightly_local.sh"
+RUN_SCRIPT = "/home/aliemen/opalx/nightly-build-opalx/NightlyBuildX/scripts/run_nightly_local.sh"
 
 # Simple in-memory state to track the currently running job.
 _job_lock = threading.Lock()
