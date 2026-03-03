@@ -11,7 +11,7 @@ declare -ri	EC_ARG_ERROR=1
 declare -ri	EC_GIT_ERROR=10
 
 declare branch="master"
-declare regtests_branch="master"
+declare regtests_branch="cleanup"
 declare architecture="cpu-serial"
 
 # indexed arrays
@@ -82,8 +82,18 @@ On further calls:
 OPTIONS:
 ===========
 --publish-dir=DIR
-	Prefix of the publication directory. If not set
-	or empty, no HTML output will be created.
+	Prefix of the publication directory.
+	If not set, defaults to /home/aliemen/nightly-results/
+	If explicitly set to empty (e.g. --publish-dir=''), no HTML output will be created.
+
+--use-slurm
+	Run regression tests via salloc/srun (cluster mode). Default is local execution.
+
+ENV:
+====
+OPALX_SRC_DIR
+	Path to an existing OPALX source directory to compile from.
+	If set, this is preferred over cloning into the workspace.
 
 --config=FILE
 	The options above can be defined in the configuration FILE.
@@ -123,12 +133,14 @@ declare	tests_repo_url="https://github.com/OPALX-project/regression-tests-x.git"
 # of the regression und unit tests. If empty, nothing will be
 # published.
 declare -x	publish_dir=''
+declare     publish_dir_was_set='no'
 
 # run unit- and/or regression tests
 declare	opt_force='no'
 declare	do_compile='no'
 declare do_unittests='no'
 declare do_regtests='no'
+declare use_slurm='no'
 
 # configuration file
 declare	opt_config_file="default-${branch}.conf"
@@ -152,6 +164,9 @@ while (( $# > 0 )); do
                 die 1 "ERROR: cannot source configuration file - ${opt_config_file} "
             fi
             ;;
+        --use-slurm )
+            use_slurm='yes'
+            ;;
 		--publish-dir|--publish-dir=* )
              
             if [[ $1 == *=* ]]; then
@@ -159,6 +174,7 @@ while (( $# > 0 )); do
             else
                 publish_dir="$2"; shift 1
             fi
+            publish_dir_was_set='yes'
             if [[ -n ${publish_dir} ]]; then
                 publish_dir=$(python3 -c "import os, sys; print(os.path.abspath(sys.argv[1]))" "${publish_dir}")
             fi
@@ -192,7 +208,15 @@ while (( $# > 0 )); do
 	shift 1
 done
 
-mkdir -p "${publish_dir}"
+# Default: always publish nightly results unless explicitly disabled.
+# To disable publication, pass --publish-dir='' explicitly.
+if [[ "${publish_dir_was_set}" != "yes" && -z "${publish_dir}" ]]; then
+    publish_dir="/home/aliemen/nightly-results"
+fi
+if [[ -n "${publish_dir}" ]]; then
+    publish_dir=$(python3 -c "import os, sys; print(os.path.abspath(sys.argv[1]))" "${publish_dir}")
+    mkdir -p "${publish_dir}"
+fi
 
 
 #-------------------------------------------------------------------------------
@@ -217,10 +241,25 @@ declare -r bindir="${abs_scriptname%/*}"
 declare -r prefix="${bindir%/*}"
 declare -r workspace="${prefix}/workspace"
 declare -r branchdir="${workspace}/${branch}"
-declare -r srcdir="${branchdir}/src"
+declare    srcdir="${branchdir}/src"
 declare    builddir="${branchdir}/${architecture}/build"
 declare -r testsbase="${branchdir}/tests"
 declare -r testsdir="${testsbase}/RegressionTests"
+
+# Prefer an existing local OPALX working directory when available.
+# This lets the script compile from a local checkout (or an override)
+# while still keeping build artifacts under ${workspace}/${branch}/...
+declare -r local_opalx_src_sibling="${prefix%/*}/opalx"
+declare -r local_opalx_src_home="${HOME}/opalx"
+if [[ -n "${OPALX_SRC_DIR:-}" ]]; then
+    if [[ -d "${OPALX_SRC_DIR}" ]]; then
+        srcdir="${OPALX_SRC_DIR}"
+    fi
+elif [[ -d "${local_opalx_src_sibling}" ]]; then
+    srcdir="${local_opalx_src_sibling}"
+elif [[ -d "${local_opalx_src_home}" ]]; then
+    srcdir="${local_opalx_src_home}"
+fi
 
 # Result variables
 result_compile="-"
@@ -288,6 +327,7 @@ update_repo() {
 
 compile_opalx() {
     result_compile='failed'
+    mkdir -p "${branchdir}"
 	cd "${branchdir}"
 	rm -rf "${builddir}"
 	mkdir -p "${builddir}"
@@ -320,7 +360,12 @@ run_regressiontests() {
     opts+=("--timestamp=${timestamp}")
 
     # Run regression tests
-	salloc --gpus=1 --partition=gwendolen --cluster=gmerlin6  --account=gwendolen --nodes=1 --ntasks=1 --cpus-per-task=1 --time=02:00:00 srun --pty python3 "${run_tests}" "${opts[@]}" "--" "${tests[@]}"
+    if [[ "${use_slurm}" == "yes" ]]; then
+	    salloc --gpus=1 --partition=gwendolen --cluster=gmerlin6  --account=gwendolen --nodes=1 --ntasks=1 --cpus-per-task=1 --time=02:00:00 \
+            srun --pty python3 "${run_tests}" "${opts[@]}" "--" "${tests[@]}"
+    else
+        python3 "${run_tests}" "${opts[@]}" "--" "${tests[@]}"
+    fi
 
     # Ensure existance of publishing directory
     local -i ec=$?
@@ -329,8 +374,38 @@ run_regressiontests() {
     # compile the XML results file with the XSLT stylesheet
     local -r results_xml="${publish_regtests_dir}/results_${timestamp}.xml"
     local -r results_xslt="${publish_regtests_dir}/results.xslt"
-    if [[ -f "${results_xml}" && -f "${results_xslt}" ]]; then
-        xsltproc "${results_xslt}" "${results_xml}" > "${results_xml%.*}.html"
+    if [[ -f "${results_xml}" ]]; then
+        local -r results_html="${results_xml%.*}.html"
+        if [[ -f "${results_xslt}" && $(command -v xsltproc 2>/dev/null) ]]; then
+            xsltproc "${results_xslt}" "${results_xml}" > "${results_html}" || true
+        fi
+        # Fallback: if xsltproc is not available or failed, generate a minimal HTML summary.
+        if [[ ! -s "${results_html}" ]]; then
+            python3 - <<'PY' "${results_xml}" "${results_html}"
+import sys, xml.etree.ElementTree as ET
+
+xml_path, html_path = sys.argv[1], sys.argv[2]
+root = ET.parse(xml_path).getroot()
+
+sims = root.findall("Simulation")
+broken = sum(1 for s in sims for t in s.findall("Test") if t.findtext("state") == "broken")
+failed = sum(1 for s in sims for t in s.findall("Test") if t.findtext("state") == "failed")
+passed = sum(1 for s in sims for t in s.findall("Test") if t.findtext("state") == "passed")
+total = sum(1 for s in sims for _ in s.findall("Test"))
+
+with open(html_path, "w", encoding="utf-8") as f:
+    f.write("<html><head><title>OPALX Regression Results (minimal)</title></head><body>\\n")
+    f.write(f"<h1>OPALX Regression Results (minimal)</h1>\\n")
+    f.write(f"<p>Passed: {passed} &nbsp; Broken: {broken} &nbsp; Failed: {failed} &nbsp; Total tests: {total}</p>\\n")
+    f.write("<ul>\\n")
+    for s in sims:
+        name = s.get("name", "")
+        descr = s.get("description", "")
+        states = [t.findtext("state") or "-" for t in s.findall("Test")]
+        f.write(f"<li><b>{name}</b> – {descr} (states: {', '.join(states)})</li>\\n")
+    f.write("</ul>\\n</body></html>\\n")
+PY
+        fi
     fi
 
     # get results from HTML file created/updated by regression-tests 
@@ -454,16 +529,24 @@ update_overview() {
   $(cat ${bindir}/html/org-html-themes/src/readtheorg_theme/js/readtheorg.js 2>/dev/null || echo '')
 </script>"
 
-    pandoc -f org -t html \
-        --metadata title="OPALX" \
-        --include-in-header=<(echo "${style_content}") \
-        -s -o "${index_org%.*}.html" "${index_org}"
-    
-    # Update master landing page with all architectures
-    update_master_landing_page
+    if command -v pandoc 1>/dev/null 2>&1; then
+        pandoc -f org -t html \
+            --metadata title="OPALX" \
+            --include-in-header=<(echo "${style_content}") \
+            -s -o "${index_org%.*}.html" "${index_org}"
+
+        # Update master landing page with all architectures
+        update_master_landing_page
+    else
+        echo "pandoc not found; skipping overview HTML generation."
+    fi
 }
 
 update_master_landing_page() {
+    if ! command -v pandoc 1>/dev/null 2>&1; then
+        return 0
+    fi
+
     # Master landing page location
     local -r master_dir="${publish_dir}/overview/${branch}"
     local -r master_org="${master_dir}/index.org"
@@ -530,7 +613,16 @@ main() {
     
     # Getting latest repo version
     printf "\nUpdating OPALX source repository... \n"
-	update_repo "${srcdir}" "${branch}" "${src_repo_url}" && do_compile='yes'
+    if [[ -d "${srcdir}" ]]; then
+        if git -C "${srcdir}" rev-parse --is-inside-work-tree 1>/dev/null 2>&1; then
+            update_repo "${srcdir}" "${branch}" "${src_repo_url}" && do_compile='yes'
+        else
+            echo "Using local OPALX source (non-git): ${srcdir}"
+            do_compile='yes'
+        fi
+    else
+        update_repo "${srcdir}" "${branch}" "${src_repo_url}" && do_compile='yes'
+    fi
 
     # If the binary does not exist we need to compile
     [[ -e ${opalxbin} ]] || do_compile='yes'
