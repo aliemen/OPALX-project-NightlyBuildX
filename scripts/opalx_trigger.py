@@ -19,6 +19,7 @@ app = Flask(__name__)
 BRANCH_PATTERN = re.compile(r"^[A-Za-z0-9._\-/]+$")
 
 RUN_SCRIPT = "/home/aliemen/opalx/nightly-build-opalx/NightlyBuildX/scripts/run_nightly_local.sh"
+CONFIG_FILE = "/home/aliemen/opalx/nightly-build-opalx/NightlyBuildX/scripts/config/debug-cpu.conf"
 
 # Base directory for full trigger logs on disk. Can be overridden via env.
 TRIGGER_LOG_BASE_DIR = os.environ.get(
@@ -74,7 +75,7 @@ def _run_nightly_job(branch: str, env: dict) -> None:
             log_file = open(log_file_path, "a", encoding="utf-8")
 
         proc = subprocess.Popen(
-            [RUN_SCRIPT],
+            [RUN_SCRIPT, "--config", CONFIG_FILE],
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -117,6 +118,8 @@ def trigger():
 
     if not os.path.isfile(RUN_SCRIPT) or not os.access(RUN_SCRIPT, os.X_OK):
         abort(500, description="Run script not found or not executable.")
+    if not os.path.isfile(CONFIG_FILE):
+        abort(500, description="Nightly config file not found on server.")
 
     env = os.environ.copy()
     env["OPALX_BRANCH"] = branch
