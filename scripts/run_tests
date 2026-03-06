@@ -208,6 +208,11 @@ while (( $# > 0 )); do
 	shift 1
 done
 
+# When invoked by the trigger (website), OPALX_BRANCH overrides the config file branch.
+if [[ -n "${OPALX_BRANCH:-}" ]]; then
+	branch="${OPALX_BRANCH}"
+fi
+
 # Default: always publish nightly results unless explicitly disabled.
 # To disable publication, pass --publish-dir='' explicitly.
 if [[ "${publish_dir_was_set}" != "yes" && -z "${publish_dir}" ]]; then
